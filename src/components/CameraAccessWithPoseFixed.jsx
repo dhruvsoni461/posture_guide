@@ -40,11 +40,17 @@ const CameraAccessWithPoseFixed = () => {
   const [muted, setMuted] = useState(false);
   const [currentPosture, setCurrentPosture] = useState(null); // {label: 'good'|'mild'|'bad', angle: number}
   const [poseDetected, setPoseDetected] = useState(false);
+  const [samplingLoopActive, setSamplingLoopActive] = useState(false); // 15s on / 60s off loop
 
   // store last keypoints here (and push to window.__LATEST_KEYPOINTS__)
   const latestKeypointsRef = useRef(null);
   const detectorInstanceRef = useRef(null);
   const postureCheckIntervalRef = useRef(null);
+
+  // Periodic sampling loop (15s detection, 60s pause)
+  const samplingWindowTimeoutRef = useRef(null);
+  const samplingLoopTimeoutRef = useRef(null);
+  const samplingLoopFlagRef = useRef(false);
 
   // Helper: draw keypoints and posture status on canvas
   const drawKeypoints = useCallback((keypoints, posture) => {
@@ -319,8 +325,31 @@ const CameraAccessWithPoseFixed = () => {
     detectorInstanceRef.current = instance;
   }, [debugMode, muted]);
 
-  // Start sampling (start detector). Camera must be active (startCamera) before detector starts.
-  const handleStartSampling = useCallback(async () => {
+  // Helper: stop detector + camera + posture interval (single 15s window)
+  const stopSamplingWindow = useCallback(async () => {
+    try {
+      await stopDetector();
+    } catch (e) {
+      console.warn('stopDetector error', e);
+    }
+
+    if (postureCheckIntervalRef.current) {
+      clearInterval(postureCheckIntervalRef.current);
+      postureCheckIntervalRef.current = null;
+    }
+
+    stopCamera();
+    setDetectorRunning(false);
+    setCurrentPosture(null);
+  }, [stopCamera]);
+
+  // Single 15s sampling window
+  const startSamplingWindow = useCallback(async () => {
+    // If user has stopped the loop, don't start a new window
+    if (!samplingLoopFlagRef.current) {
+      return;
+    }
+
     // Set user gesture so speech can run: call this on a direct user interaction
     try {
       setUserGesture();
@@ -341,9 +370,9 @@ const CameraAccessWithPoseFixed = () => {
     try {
       await startDetector();
       setDetectorRunning(true);
-      setStatusMessage('Sampling started (detector running)');
-      
-      // Start continuous posture checking every 500ms
+      setStatusMessage('Sampling window active (15s)');
+
+      // Start continuous posture checking every 500ms during this 15s window
       let consecutiveBadCount = 0;
       postureCheckIntervalRef.current = setInterval(async () => {
         if (latestKeypointsRef.current && detectorInstanceRef.current) {
@@ -356,7 +385,7 @@ const CameraAccessWithPoseFixed = () => {
               };
               setCurrentPosture(newPosture);
               setLastPostureCheck(new Date().toLocaleTimeString());
-              
+
               // Immediate alert check: if bad posture persists for 3+ consecutive checks (1.5 seconds)
               if (result.label === 'bad') {
                 consecutiveBadCount++;
@@ -389,32 +418,63 @@ const CameraAccessWithPoseFixed = () => {
           }
         }
       }, 500); // Check every 500ms for real-time feedback
+
+      // Stop this window after 15 seconds, then schedule next one
+      if (samplingWindowTimeoutRef.current) {
+        clearTimeout(samplingWindowTimeoutRef.current);
+      }
+      samplingWindowTimeoutRef.current = setTimeout(async () => {
+        await stopSamplingWindow();
+        setStatusMessage('Sampling window finished. Next check in 60s');
+
+        // Schedule next 15s window after 60 seconds (camera off during this time)
+        if (samplingLoopFlagRef.current) {
+          if (samplingLoopTimeoutRef.current) {
+            clearTimeout(samplingLoopTimeoutRef.current);
+          }
+          samplingLoopTimeoutRef.current = setTimeout(() => {
+            startSamplingWindow();
+          }, 60000);
+        }
+      }, 15000);
     } catch (err) {
       console.error('startDetector failed', err);
       setStatusMessage('Detector start failed');
+      await stopSamplingWindow();
     }
-  }, [handleInitDetector, startCamera]);
+  }, [handleInitDetector, startCamera, stopSamplingWindow]);
 
-  const handleStopSampling = useCallback(async () => {
-    try {
-      // stop detector first (it will stop its internal timers)
-      await stopDetector();
-    } catch (e) {
-      console.warn('stopDetector error', e);
+  // Start / stop the 15s-on / 60s-off loop
+  const handleStartSamplingLoop = useCallback(async () => {
+    if (samplingLoopFlagRef.current) {
+      // Already active – should not happen, but guard
+      return;
     }
-    
-    // Stop continuous posture checking
-    if (postureCheckIntervalRef.current) {
-      clearInterval(postureCheckIntervalRef.current);
-      postureCheckIntervalRef.current = null;
+    samplingLoopFlagRef.current = true;
+    setSamplingLoopActive(true);
+
+    // Start first window immediately
+    await startSamplingWindow();
+  }, [startSamplingWindow]);
+
+  const handleStopSamplingLoop = useCallback(async () => {
+    samplingLoopFlagRef.current = false;
+    setSamplingLoopActive(false);
+
+    // Clear all timeouts
+    if (samplingWindowTimeoutRef.current) {
+      clearTimeout(samplingWindowTimeoutRef.current);
+      samplingWindowTimeoutRef.current = null;
     }
-    
-    // then stop camera
-    stopCamera();
-    setDetectorRunning(false);
-    setCurrentPosture(null);
-    setStatusMessage('Sampling stopped');
-  }, [stopCamera]);
+    if (samplingLoopTimeoutRef.current) {
+      clearTimeout(samplingLoopTimeoutRef.current);
+      samplingLoopTimeoutRef.current = null;
+    }
+
+    // Stop any active window
+    await stopSamplingWindow();
+    setStatusMessage('Sampling loop stopped');
+  }, [stopSamplingWindow]);
 
   // Redraw canvas when posture changes
   useEffect(() => {
@@ -431,6 +491,13 @@ const CameraAccessWithPoseFixed = () => {
       if (postureCheckIntervalRef.current) {
         clearInterval(postureCheckIntervalRef.current);
       }
+      if (samplingWindowTimeoutRef.current) {
+        clearTimeout(samplingWindowTimeoutRef.current);
+      }
+      if (samplingLoopTimeoutRef.current) {
+        clearTimeout(samplingLoopTimeoutRef.current);
+      }
+      samplingLoopFlagRef.current = false;
       stopCamera();
     };
   }, [stopCamera]);
@@ -477,19 +544,19 @@ const CameraAccessWithPoseFixed = () => {
         <button
           type="button"
           onClick={async () => {
-            if (detectorRunning) {
-              await handleStopSampling();
+            if (samplingLoopActive) {
+              await handleStopSamplingLoop();
             } else {
-              await handleStartSampling();
+              await handleStartSamplingLoop();
             }
           }}
           className={`inline-flex items-center rounded-xl px-4 py-2 font-semibold shadow transition ${
-            detectorRunning
+            samplingLoopActive
               ? 'bg-emerald-500/80 text-white shadow-emerald-500/40'
               : 'bg-slate-800 text-slate-200 shadow-slate-900'
           }`}
         >
-          {detectorRunning ? 'Stop Sampling' : 'Start Sampling'}
+          {samplingLoopActive ? 'Stop Sampling' : 'Start Sampling'}
         </button>
 
         <button

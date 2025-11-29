@@ -1,8 +1,11 @@
 import { useNavigate } from 'react-router-dom';
+import { useState } from 'react';
 import CameraAccessWithPoseFixed from '../components/CameraAccessWithPoseFixed.jsx';
+import QuickYogaChallenge from '../components/QuickYogaChallenge.jsx';
 
 const Landing = () => {
   const navigate = useNavigate();
+  const [showYogaChallenge, setShowYogaChallenge] = useState(false);
 
   const handleLogout = () => {
     localStorage.removeItem('auth_token');
@@ -36,7 +39,30 @@ const Landing = () => {
           </p>
         </section>
 
+        {/* Quick Yoga Challenge CTA */}
+        <div className="mb-8 text-center">
+          <button
+            type="button"
+            onClick={() => setShowYogaChallenge(true)}
+            className="inline-flex items-center gap-3 rounded-2xl bg-gradient-to-r from-primary to-purple-600 px-8 py-4 text-lg font-bold text-white shadow-2xl shadow-primary/40 transition hover:from-sky-500 hover:to-purple-500 hover:scale-105"
+          >
+            <span className="text-2xl">🧘</span>
+            <span>Quick Yoga Challenge</span>
+          </button>
+          <p className="mt-3 text-sm text-slate-400">
+            3 poses • 5 seconds each • ~45-60 seconds total
+          </p>
+        </div>
+
         <CameraAccessWithPoseFixed />
+
+        {/* Quick Yoga Challenge Modal */}
+        {showYogaChallenge && (
+          <QuickYogaChallenge
+            onClose={() => setShowYogaChallenge(false)}
+            voiceEnabled={true}
+          />
+        )}
       </main>
     </div>
   );

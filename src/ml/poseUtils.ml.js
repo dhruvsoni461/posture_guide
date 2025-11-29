@@ -120,7 +120,7 @@ export function computeWindowStatistics(samples) {
 /**
  * Parse keypoints from various formats
  */
-function parseKeypoints(keypoints) {
+export function parseKeypoints(keypoints) {
   const points = {};
 
   if (Array.isArray(keypoints)) {
@@ -330,4 +330,101 @@ export function normalizeFeatures(features, stats = null) {
     if (std === 0) return 0;
     return (f - mean) / std;
   });
+}
+
+/**
+ * Helper functions for yoga pose detection
+ */
+
+/**
+ * Calculate angle between three points (in degrees)
+ * @param {Object} a - Point a {x, y, z?}
+ * @param {Object} b - Point b (vertex) {x, y, z?}
+ * @param {Object} c - Point c {x, y, z?}
+ * @returns {number} Angle in degrees
+ */
+export function angleBetween(a, b, c) {
+  if (!a || !b || !c) return 0;
+  
+  // Vector from b to a
+  const vec1 = {
+    x: a.x - b.x,
+    y: a.y - b.y,
+    z: (a.z || 0) - (b.z || 0)
+  };
+  
+  // Vector from b to c
+  const vec2 = {
+    x: c.x - b.x,
+    y: c.y - b.y,
+    z: (c.z || 0) - (b.z || 0)
+  };
+  
+  // Dot product
+  const dot = vec1.x * vec2.x + vec1.y * vec2.y + vec1.z * vec2.z;
+  
+  // Magnitudes
+  const mag1 = Math.sqrt(vec1.x * vec1.x + vec1.y * vec1.y + vec1.z * vec1.z);
+  const mag2 = Math.sqrt(vec2.x * vec2.x + vec2.y * vec2.y + vec2.z * vec2.z);
+  
+  if (mag1 === 0 || mag2 === 0) return 0;
+  
+  // Angle in radians, convert to degrees
+  const cosAngle = Math.max(-1, Math.min(1, dot / (mag1 * mag2)));
+  return Math.acos(cosAngle) * 180 / Math.PI;
+}
+
+/**
+ * Calculate Euclidean distance between two points
+ * @param {Object} a - Point a {x, y, z?}
+ * @param {Object} b - Point b {x, y, z?}
+ * @returns {number} Distance
+ */
+export function distance(a, b) {
+  if (!a || !b) return 0;
+  const dx = a.x - b.x;
+  const dy = a.y - b.y;
+  const dz = ((a.z || 0) - (b.z || 0));
+  return Math.sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+/**
+ * Calculate average of an array of numbers
+ * @param {number[]} values - Array of numbers
+ * @returns {number} Average value
+ */
+export function avg(values) {
+  if (!values || values.length === 0) return 0;
+  const sum = values.reduce((acc, val) => acc + (isFinite(val) ? val : 0), 0);
+  return sum / values.length;
+}
+
+/**
+ * Circular buffer for smoothing features
+ */
+export class SmoothingBuffer {
+  constructor(size = 4) {
+    this.size = size;
+    this.buffer = [];
+  }
+
+  add(value) {
+    this.buffer.push(value);
+    if (this.buffer.length > this.size) {
+      this.buffer.shift();
+    }
+  }
+
+  getAverage() {
+    if (this.buffer.length === 0) return null;
+    return avg(this.buffer);
+  }
+
+  getValues() {
+    return [...this.buffer];
+  }
+
+  clear() {
+    this.buffer = [];
+  }
 }
